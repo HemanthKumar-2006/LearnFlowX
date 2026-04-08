@@ -300,12 +300,30 @@ HARD STRUCTURAL CONSTRAINTS
 - Priority must only be high, medium, or low.
 - Use high priority for foundational or goal-critical topics.
 
-RESOURCE RULES
-- Use ONLY these trusted source families:
-  developer.mozilla.org, react.dev, freecodecamp.org, huggingface.co, stanford.edu, mit.edu.
-- Do not invent URLs.
-- If unsure, omit the resource and let the post-processor inject a fallback.
-- Maximum 2 resources per topic.
+RESOURCE RULES (STRICT)
+- Use ONLY these STABLE BASE URLs. Never deep-link to a specific article or slug.
+  Allowed URLs:
+    https://react.dev/learn
+    https://react.dev/reference/react
+    https://developer.mozilla.org/en-US/docs/Web/JavaScript
+    https://developer.mozilla.org/en-US/docs/Web/HTML
+    https://developer.mozilla.org/en-US/docs/Web/CSS
+    https://developer.mozilla.org/en-US/docs/Web/HTTP
+    https://developer.mozilla.org/en-US/docs/Web/API
+    https://developer.mozilla.org/en-US/docs/Web/Accessibility
+    https://developer.mozilla.org/en-US/docs/Web/Performance
+    https://developer.mozilla.org/en-US/docs/Web/Security
+    https://developer.mozilla.org/en-US/docs/Learn
+    https://www.freecodecamp.org/learn/
+    https://www.freecodecamp.org/news/
+    https://huggingface.co/learn
+    https://pytorch.org/tutorials/
+    https://nextjs.org/docs
+    https://scikit-learn.org/stable/
+- NEVER invent URLs. NEVER use article slugs like "/news/docker-for-beginners/".
+- If the exact URL you would pick is not in the list above, OMIT the resource. The post-processor will inject a verified fallback.
+- Do not use Medium, YouTube article links, GitHub repos, Coursera, Udemy, blogs, or any source outside the list.
+- Maximum 2 resources per topic. Prefer official docs first, then freeCodeCamp.
 
 INTELLIGENCE LAYER
 - "learning_strategy" must be exactly one of "Fast Track", "Balanced Path", or "Deep Mastery". Suggested value: "${c.strategy}".

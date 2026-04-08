@@ -39,6 +39,8 @@ export function buildGraph(roadmap: Roadmap): BuiltGraph {
         description: phase.description,
         index: phaseIdx + 1,
         topicCount: phase.topics.length,
+        isImportant: Boolean(phase.isImportant),
+        isDifficult: Boolean(phase.isDifficult),
       },
     });
 

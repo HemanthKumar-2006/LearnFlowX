@@ -2,18 +2,39 @@ import type {
   Level,
   Phase,
   Priority,
+  Resource,
   Roadmap,
   RoadmapInput,
   Topic,
+  TopicDifficulty,
   WeeklyPlanItem,
 } from "./types";
 import type { RawLlmPhase, RawLlmRoadmap, RawLlmTopic } from "./geminiClient";
 import { buildContext } from "./contextBuilder";
-import { getFallbackResources, isTrustedUrl } from "./resourceFallbacks";
+import {
+  getFallbackResources,
+  isTrustedUrl,
+  platformFromUrl,
+} from "./resourceFallbacks";
 
 type Difficulty = "beginner" | "intermediate" | "advanced";
 type TopicWithMeta = Topic & Record<string, unknown>;
 type PhaseWithMeta = Phase & Record<string, unknown>;
+
+// Map a phase-level difficulty to the card-friendly easy/medium/hard tag
+// shown on topic cards, nudged by the topic's own priority.
+function phaseDifficultyToTopicTag(
+  phaseDifficulty: Difficulty,
+  priority: Priority,
+): TopicDifficulty {
+  if (phaseDifficulty === "beginner") {
+    return priority === "high" ? "medium" : "easy";
+  }
+  if (phaseDifficulty === "intermediate") {
+    return priority === "low" ? "easy" : priority === "high" ? "hard" : "medium";
+  }
+  return priority === "low" ? "medium" : "hard";
+}
 
 interface NextBestActionData {
   title: string;
@@ -288,7 +309,7 @@ function buildTopic(
   const description = createTopicDescription(title, input, phaseTitle, raw.description);
   const project = raw.project?.trim() || undefined;
 
-  const llmResources = Array.isArray(raw.resources)
+  const llmResources: Resource[] = Array.isArray(raw.resources)
     ? raw.resources
         .filter(
           (resource) =>
@@ -298,10 +319,14 @@ function buildTopic(
             resource.title.trim().length > 0 &&
             isTrustedUrl(resource.url.trim()),
         )
-        .map((resource) => ({
-          title: resource.title.trim(),
-          url: resource.url.trim(),
-        }))
+        .map((resource) => {
+          const url = resource.url.trim();
+          return {
+            title: resource.title.trim(),
+            url,
+            platform: platformFromUrl(url),
+          };
+        })
         .slice(0, 2)
     : [];
 
@@ -360,9 +385,10 @@ function buildPhase(
   if (!raw || typeof raw !== "object") return null;
 
   const title = normalizeTitle(raw.title ?? "");
-  if (!title || !Array.isArray(raw.topics)) return null;
+  if (!title) return null;
 
-  const topics = raw.topics
+  const rawTopics = Array.isArray(raw.topics) ? raw.topics : [];
+  const topics = rawTopics
     .map((topic) =>
       buildTopic(topic, input, title, phaseIndex, totalPhases, goalSignals, seen),
     )
@@ -597,11 +623,44 @@ function ensureGoalDominance(
   return phases;
 }
 
+const PRIORITY_ORDER: Record<Priority, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+function orderTopicsLogically(topics: TopicWithMeta[]): TopicWithMeta[] {
+  // Stable sort: foundational/high-priority topics surface first inside a phase
+  // while preserving the LLM's original sequencing for ties.
+  return topics
+    .map((topic, index) => ({ topic, index }))
+    .sort((left, right) => {
+      const priorityDelta =
+        PRIORITY_ORDER[left.topic.priority] - PRIORITY_ORDER[right.topic.priority];
+      if (priorityDelta !== 0) return priorityDelta;
+      return left.index - right.index;
+    })
+    .map(({ topic }) => topic);
+}
+
 function finalizePhases(phases: PhaseWithMeta[], hoursPerWeek: number): PhaseWithMeta[] {
   let weekCursor = 1;
 
   return phases.map((phase) => {
-    const phaseHours = phase.topics.reduce((sum, topic) => sum + topic.estimatedHours, 0);
+    const phaseDifficulty =
+      (phase.difficulty as Difficulty | undefined) ?? "intermediate";
+    const orderedTopics = orderTopicsLogically(phase.topics as TopicWithMeta[]).map(
+      (topic) => {
+        const tagged = topic;
+        tagged.difficulty = phaseDifficultyToTopicTag(phaseDifficulty, topic.priority);
+        return tagged;
+      },
+    );
+
+    const phaseHours = orderedTopics.reduce(
+      (sum, topic) => sum + topic.estimatedHours,
+      0,
+    );
     const phaseWeeks = Math.max(1, Math.ceil(phaseHours / Math.max(1, hoursPerWeek)));
     const weekStart = weekCursor;
     const weekEnd = weekStart + phaseWeeks - 1;
@@ -609,20 +668,23 @@ function finalizePhases(phases: PhaseWithMeta[], hoursPerWeek: number): PhaseWit
 
     return {
       ...phase,
+      topics: orderedTopics,
       estimatedHours: phaseHours,
       duration: formatWeeks(phaseWeeks),
       weekRange: weekStart === weekEnd ? `Week ${weekStart}` : `Week ${weekStart}-${weekEnd}`,
       completionPercentage:
-        phase.topics.length === 0
+        orderedTopics.length === 0
           ? 0
           : Math.round(
-              (phase.topics.filter((topic) => topic.completed).length /
-                phase.topics.length) *
+              (orderedTopics.filter((topic) => topic.completed).length /
+                orderedTopics.length) *
                 100,
             ),
     } as PhaseWithMeta;
   });
 }
+
+const MAX_TOPICS_PER_WEEK = 3;
 
 function buildWeeklyPlan(phases: PhaseWithMeta[], hoursPerWeek: number): WeeklyPlanItem[] {
   const weeklyPlan: WeeklyPlanItem[] = [];
@@ -630,8 +692,17 @@ function buildWeeklyPlan(phases: PhaseWithMeta[], hoursPerWeek: number): WeeklyP
   let globalWeek = 1;
 
   for (const phase of phases) {
-    const phaseHours = phase.estimatedHours ?? phase.topics.reduce((sum, topic) => sum + topic.estimatedHours, 0);
-    const phaseWeeks = Math.max(1, Math.ceil(phaseHours / weeklyBudget));
+    const topics = phase.topics;
+    const phaseHours =
+      phase.estimatedHours ??
+      topics.reduce((sum, topic) => sum + topic.estimatedHours, 0);
+
+    // Number of weeks must be large enough to honor BOTH the hour budget
+    // AND the "max 3 topics per week" cap so no week gets overloaded.
+    const weeksByHours = Math.ceil(phaseHours / weeklyBudget);
+    const weeksByTopics = Math.ceil(topics.length / MAX_TOPICS_PER_WEEK);
+    const phaseWeeks = Math.max(1, weeksByHours, weeksByTopics);
+
     const idealLoad = Math.max(1, Math.round(phaseHours / phaseWeeks));
     const bins = Array.from({ length: phaseWeeks }, () => ({
       topics: [] as string[],
@@ -639,17 +710,21 @@ function buildWeeklyPlan(phases: PhaseWithMeta[], hoursPerWeek: number): WeeklyP
     }));
 
     let binIndex = 0;
-    for (let topicIndex = 0; topicIndex < phase.topics.length; topicIndex += 1) {
-      const topic = phase.topics[topicIndex];
-      const remainingTopics = phase.topics.length - topicIndex;
+    for (let topicIndex = 0; topicIndex < topics.length; topicIndex += 1) {
+      const topic = topics[topicIndex];
+      const remainingTopics = topics.length - topicIndex;
       const remainingBins = phaseWeeks - binIndex;
 
-      if (
-        binIndex < phaseWeeks - 1 &&
+      // Advance to next week if: this week is full on topics, OR the hour
+      // budget would overflow, OR we need to spread topics across remaining bins.
+      const topicCountFull = bins[binIndex].topics.length >= MAX_TOPICS_PER_WEEK;
+      const hoursOverflow =
         bins[binIndex].topics.length > 0 &&
-        (bins[binIndex].hours + topic.estimatedHours > idealLoad * 1.2 ||
-          remainingTopics <= remainingBins)
-      ) {
+        bins[binIndex].hours + topic.estimatedHours > idealLoad * 1.2;
+      const mustSpread =
+        bins[binIndex].topics.length > 0 && remainingTopics <= remainingBins;
+
+      if (binIndex < phaseWeeks - 1 && (topicCountFull || hoursOverflow || mustSpread)) {
         binIndex += 1;
       }
 
@@ -740,6 +815,9 @@ function enrichPhaseHighlights(phases: PhaseWithMeta[]): {
   const enrichedPhases = scored.map((phase) => {
     phase.isMostImportantPhase = phase.id === mostImportantPhase.id;
     phase.isMostDifficultPhase = phase.id === mostDifficultPhase.id;
+    phase.isImportant = phase.id === mostImportantPhase.id;
+    phase.isDifficult = phase.id === mostDifficultPhase.id;
+    phase.importanceScore = Number(phase.phaseImportanceScore ?? 0);
     phase.phaseHighlight = phase.id === mostImportantPhase.id
       ? "most-important"
       : phase.id === mostDifficultPhase.id
@@ -907,23 +985,26 @@ function createCompletionInsight(phases: PhaseWithMeta[]): string {
 }
 
 function createMomentum(progressPercent: number): MomentumData {
-  if (progressPercent < 10) {
+  if (progressPercent < 15) {
     return {
       stage: "starting",
-      message: "You're at the starting phase — consistency matters most.",
+      message:
+        "You're at the starting phase — consistency matters more than speed.",
       progressPercent,
     };
   }
-  if (progressPercent <= 50) {
+  if (progressPercent < 70) {
     return {
       stage: "building",
-      message: "You're building momentum — stay consistent.",
+      message:
+        "You're building strong momentum — avoid skipping projects.",
       progressPercent,
     };
   }
   return {
     stage: "mastery",
-    message: "You're in the final stretch — focus on mastery.",
+    message:
+      "You're close to mastery — focus on depth and real-world application.",
     progressPercent,
   };
 }
@@ -936,36 +1017,68 @@ function deriveInsights(
   recommendedFocus: RecommendedFocusData,
   nextBestAction: NextBestActionData,
   mostDifficultPhase: PhaseWithMeta,
+  mostImportantPhase: PhaseWithMeta,
   warnings: string[],
   raw: RawLlmRoadmap,
 ): string[] {
-  const insights = Array.isArray(raw.insights)
+  // We intentionally do NOT blindly trust LLM insights — we only keep the
+  // first one if it is specific enough (mentions the goal or a phase title).
+  const rawInsights = Array.isArray(raw.insights)
     ? raw.insights
         .filter((item): item is string => typeof item === "string")
         .map((item) => item.trim())
         .filter(Boolean)
-        .slice(0, 2)
     : [];
 
-  insights.push(
-    `${recommendedFocus.phase} is your leverage phase, so protect extra attention for it early instead of spreading effort evenly.`,
-  );
-  insights.push(
-    `${nextBestAction.title} is the right move now because it keeps the roadmap logically sequenced and cuts down future friction.`,
-  );
+  const looksSpecific = (text: string) => {
+    if (text.length < 40) return false;
+    const lower = text.toLowerCase();
+    if (input.goal && lower.includes(input.goal.toLowerCase())) return true;
+    return lower.includes(mostImportantPhase.title.toLowerCase().slice(0, 12));
+  };
 
+  const insights: string[] = [];
+  for (const candidate of rawInsights) {
+    if (looksSpecific(candidate) && insights.length < 1) insights.push(candidate);
+  }
+
+  // 1. Goal-aware — direct phase/goal linkage.
   if (input.goal) {
     insights.push(
-      `A large chunk of this roadmap is goal-linked, so keep every project artifact tied back to ${input.goal}.`,
+      `${mostImportantPhase.title} is critical for your goal of ${input.goal} — spend extra time here before moving on.`,
+    );
+  } else {
+    insights.push(
+      `${mostImportantPhase.title} is where this roadmap earns its weight — give it more hours than the other phases.`,
     );
   }
 
+  // 2. Phase-aware next action.
   insights.push(
-    `${learningStrategy} fits this plan because it asks for about ${totalHours} hours across ${totalWeeks} weeks, with the hardest stretch in ${mostDifficultPhase.title}.`,
+    `Start with "${nextBestAction.title}" — it unlocks the rest of ${nextBestAction.phase} and keeps your sequence clean.`,
   );
 
+  // 3. Difficulty-aware warning.
+  if (mostDifficultPhase && mostDifficultPhase.id !== mostImportantPhase.id) {
+    insights.push(
+      `${mostDifficultPhase.title} is the hardest stretch — slow down there, pair every concept with a small build, and do not skip the project.`,
+    );
+  } else {
+    insights.push(
+      `Pair every concept in ${mostDifficultPhase.title} with a tiny build — that's how hard material actually sticks.`,
+    );
+  }
+
+  // 4. Strategy + budget framing.
+  insights.push(
+    `${learningStrategy}: ~${totalHours} hours across ${totalWeeks} weeks at ${input.hoursPerWeek}h/week — protect that calendar slot like a standing meeting.`,
+  );
+
+  // 5. Optional density warning.
   if (warnings.length > 0) {
-    insights.push(`Watch the roadmap density around ${mostDifficultPhase.title} so challenge does not turn into stall-out.`);
+    insights.push(
+      `This plan is intensive — if any week feels crushing, slide low-priority topics forward instead of cramming.`,
+    );
   }
 
   const unique: string[] = [];
@@ -1016,6 +1129,7 @@ function applyRoadmapMentorFields(
   roadmap.totalTopics = totalTopics;
   roadmap.learningMomentum = momentum;
   roadmap.learning_momentum = momentum;
+  roadmap.momentum = momentum;
   roadmap.completionInsight = completionInsight;
   roadmap.completion_insight = completionInsight;
   roadmap.recommendedFocusCard = recommendedFocus;
@@ -1082,6 +1196,7 @@ export function postProcessRoadmap(
       recommendedFocus,
       nextBestAction,
       highlighted.mostDifficultPhase,
+      highlighted.mostImportantPhase,
       warnings,
       raw,
     );

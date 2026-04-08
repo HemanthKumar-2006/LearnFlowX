@@ -3,9 +3,11 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  Brain,
   Calendar,
   CalendarDays,
   Clock,
+  Compass,
   Download,
   Flame,
   Gauge,
@@ -14,6 +16,7 @@ import {
   RefreshCcw,
   Sparkles,
   Target,
+  Zap,
 } from "lucide-react";
 import type { Phase, Roadmap, Topic } from "@/lib/types";
 import { deriveProgress, useRoadmapStore } from "@/store/useRoadmapStore";
@@ -82,34 +85,102 @@ export function RoadmapSidebar({
         </div>
       </div>
 
-      {/* Strategy */}
+      {/* Strategy — premium gradient card with brain icon */}
       {roadmap.strategy && (
-        <div className="rounded-xl border border-brand-100 bg-gradient-to-br from-brand-50 to-violet-50 p-3">
-          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700">
-            <Sparkles className="h-3 w-3" />
-            Learning Strategy
-          </div>
-          <p className="text-xs leading-relaxed text-slate-700">{roadmap.strategy}</p>
-          {roadmap.goal && (
-            <div className="mt-2 flex items-start gap-1.5 rounded-md bg-white/70 px-2 py-1.5 text-[11px] text-slate-700">
-              <Target className="mt-0.5 h-3 w-3 shrink-0 text-brand-600" />
-              <span className="italic">{roadmap.goal}</span>
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-500 via-violet-500 to-fuchsia-500 p-[1.5px] shadow-md">
+          <div className="rounded-[14px] bg-gradient-to-br from-white via-brand-50/60 to-violet-50/60 p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-violet-500 text-white shadow-sm">
+                <Brain className="h-4 w-4" />
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-brand-700">
+                  Learning Strategy
+                </div>
+                {roadmap.learningStrategy && (
+                  <div className="text-xs font-bold text-slate-900">
+                    {roadmap.learningStrategy}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+            <p className="text-xs leading-relaxed text-slate-700">
+              {roadmap.strategy}
+            </p>
+            {roadmap.goal && (
+              <div className="mt-2.5 flex items-start gap-1.5 rounded-lg border border-white/60 bg-white/80 px-2.5 py-1.5 text-[11px] text-slate-700 shadow-sm">
+                <Target className="mt-0.5 h-3 w-3 shrink-0 text-brand-600" />
+                <span className="italic">{roadmap.goal}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Stats */}
+      {/* Stats — 2x2 card grid */}
       <div className="grid grid-cols-2 gap-2">
         <Stat
           icon={Calendar}
           label="Duration"
           value={roadmap.totalDuration || `${roadmap.totalWeeks}w`}
+          accent="from-brand-50 to-white"
         />
-        <Stat icon={Clock} label="Hours" value={`${roadmap.totalHours}`} />
-        <Stat icon={Layers} label="Phases" value={`${roadmap.phases.length}`} />
-        <Stat icon={Flame} label="High-Prio" value={`${highPriorityCount}`} />
+        <Stat
+          icon={Clock}
+          label="Hours"
+          value={`${roadmap.totalHours}`}
+          accent="from-violet-50 to-white"
+        />
+        <Stat
+          icon={Layers}
+          label="Phases"
+          value={`${roadmap.phases.length}`}
+          accent="from-sky-50 to-white"
+        />
+        <Stat
+          icon={Flame}
+          label="High-Prio"
+          value={`${highPriorityCount}`}
+          accent="from-rose-50 to-white"
+        />
       </div>
+
+      {/* Momentum — emotional intelligence nudge */}
+      {roadmap.momentum && (
+        <div className="flex items-start gap-2 rounded-xl border border-slate-200 bg-white p-3">
+          <Zap
+            className={cn(
+              "mt-0.5 h-4 w-4 shrink-0",
+              roadmap.momentum.stage === "starting"
+                ? "text-sky-500"
+                : roadmap.momentum.stage === "building"
+                  ? "text-amber-500"
+                  : "text-emerald-500",
+            )}
+          />
+          <p className="text-[11px] leading-relaxed text-slate-700">
+            {roadmap.momentum.message}
+          </p>
+        </div>
+      )}
+
+      {/* Next best action + completion insight */}
+      {(roadmap.nextBestAction || roadmap.completionInsight) && (
+        <div className="rounded-xl border border-brand-100 bg-brand-50/50 p-3">
+          {roadmap.completionInsight && (
+            <div className="mb-1.5 flex items-start gap-1.5 text-[11px] text-slate-700">
+              <Compass className="mt-0.5 h-3 w-3 shrink-0 text-brand-600" />
+              <span>{roadmap.completionInsight}</span>
+            </div>
+          )}
+          {roadmap.nextBestAction && (
+            <div className="text-[11px] leading-relaxed text-slate-700">
+              <span className="font-semibold text-brand-700">Next: </span>
+              {roadmap.nextBestAction.split(":")[0]}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Progress */}
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -388,13 +459,20 @@ function Stat({
   icon: Icon,
   label,
   value,
+  accent,
 }: {
   icon: typeof Calendar;
   label: string;
   value: string;
+  accent?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3">
+    <div
+      className={cn(
+        "rounded-xl border border-slate-200 bg-gradient-to-br p-3 shadow-sm transition-shadow hover:shadow-md",
+        accent ?? "from-white to-white",
+      )}
+    >
       <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         <Icon className="h-3 w-3" />
         {label}

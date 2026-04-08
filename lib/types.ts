@@ -13,6 +13,14 @@ export interface RoadmapInput {
   goal?: string;
 }
 
+export type TopicDifficulty = "easy" | "medium" | "hard";
+
+export interface Resource {
+  title: string;
+  url: string;
+  platform?: string; // short label shown in pill buttons e.g. "MDN", "freeCodeCamp"
+}
+
 export interface Topic {
   id: string;
   title: string;
@@ -20,9 +28,14 @@ export interface Topic {
   estimatedHours: number;
   priority: Priority;
   description: string;
-  resources: { title: string; url: string }[];
+  resources: Resource[];
   project?: string;
   completed?: boolean;
+
+  // Intelligence layer (populated by postProcessor)
+  difficulty?: TopicDifficulty;
+  importanceScore?: number; // 1-100
+  goalAligned?: boolean;
 }
 
 export interface Phase {
@@ -36,6 +49,11 @@ export interface Phase {
   weekRange?: string; // e.g. "Week 1-3"
   estimatedHours?: number;
   completionPercentage?: number;
+
+  // Intelligence highlights
+  isImportant?: boolean;
+  isDifficult?: boolean;
+  importanceScore?: number;
 }
 
 export interface WeeklyPlanItem {
@@ -71,6 +89,12 @@ export interface Roadmap {
   weeklyPlan?: WeeklyPlanItem[];
   recommendedFocus?: string;
   nextBestAction?: string;
+  completionInsight?: string;
+  momentum?: {
+    stage: "starting" | "building" | "mastery";
+    message: string;
+    progressPercent: number;
+  };
 }
 
 export interface GenerateRoadmapResponse {
